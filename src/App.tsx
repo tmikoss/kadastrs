@@ -1,4 +1,4 @@
-import { MapContainer, Marker, Popup, GeoJSON, TileLayer } from 'react-leaflet'
+import { MapContainer, GeoJSON, TileLayer } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 
 import Shape4296003 from './kadastrs/4296003.json'
@@ -89,8 +89,6 @@ const Corners = ({ selected }: { selected: SelectedMap }) => {
   const matching = filter(geoJSON.features, (feature: Feature) => {
     return selected[feature.properties.CODE]
   })
-
-  console.log(matching)
 
   const rows: GridRowsProp = map(matching, (feature) => {
     const [e, s, w, n] = bbox(feature)
