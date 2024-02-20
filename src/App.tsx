@@ -1,28 +1,26 @@
-import { MapContainer, GeoJSON, TileLayer } from 'react-leaflet'
-import 'leaflet/dist/leaflet.css'
+import { useEffect, useState } from 'react'
+import { flatMap, get, keys, map, uniqBy } from 'lodash'
+import { Fab, Tab, Tabs, styled } from '@mui/material'
+import { DataTable } from './DataTable'
+import { AppContext } from './Context'
+import { ParcelMap } from './ParcelMap'
+import type { FeatureCollection } from 'geojson'
+import { GroupMap } from './GroupMap'
+import DeleteIcon from '@mui/icons-material/Delete'
 
-import Shape4296003 from './kadastrs/4296003.json'
-import { LeafletEventHandlerFnMap, StyleFunction } from 'leaflet'
-import { Dispatch, SetStateAction, useEffect, useState } from 'react'
-import { filter, get, map, reduce } from 'lodash'
-import { Tab, Tabs, styled } from '@mui/material'
-import { DataGrid, GridColDef, GridRowsProp } from '@mui/x-data-grid'
-import bbox from 'geojson-bbox'
+const STORAGE_KEY_GROUPS = 'slected-groups'
+const STORAGE_KEY_PARCELS = 'slected-parcels'
 
-const ATTRIBUTION = 'https://data.gov.lv/dati/lv/dataset/kadastra-informacijas-sistemas-atverti-telpiskie-dati'
-const STORAGE_KEY = 'slected-features'
-
-const geoJSON = {
-  type: 'FeatureCollection',
-  features: [...Shape4296003.features]
-} as const
-
-type Feature = (typeof geoJSON)['features'][number]
-type SelectedMap = Record<string, boolean>
-
-let persisted: SelectedMap = {}
+let persistedGroups: SelectedMap = {}
 try {
-  persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+  persistedGroups = JSON.parse(localStorage.getItem(STORAGE_KEY_GROUPS) || '{}')
+} catch (error) {
+  // noop
+}
+
+let persistedParcels: SelectedMap = {}
+try {
+  persistedParcels = JSON.parse(localStorage.getItem(STORAGE_KEY_PARCELS) || '{}')
 } catch (error) {
   // noop
 }
@@ -35,113 +33,66 @@ const Container = styled('div')`
   grid-template-rows: auto 1fr;
 `
 
-const Map = ({
-  selected,
-  setSelected
-}: {
-  selected: SelectedMap
-  setSelected: Dispatch<SetStateAction<SelectedMap>>
-}) => {
-  const eventHandlers: LeafletEventHandlerFnMap = {
-    click: ({ propagatedFrom }) => {
-      const {
-        feature: {
-          properties: { CODE }
-        }
-      } = propagatedFrom as { feature: Feature }
-
-      setSelected((was) => {
-        return { ...was, [CODE]: !was[CODE] }
-      })
-    }
-  }
-
-  const style: StyleFunction<Feature> = (feature) => {
-    const code: string = get(feature, ['properties', 'CODE'])
-
-    const highlighted = !!selected[code]
-
-    if (highlighted) {
-      return {
-        color: 'red',
-        opacity: 1
-      }
-    } else {
-      return {
-        color: 'gray',
-        opacity: 0.4
-      }
-    }
-  }
-
-  return (
-    <MapContainer center={[56.945, 25.379]} zoom={13} style={{ height: '100%', width: '100%' }}>
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        url='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
-      />
-      <GeoJSON attribution={ATTRIBUTION} data={geoJSON} eventHandlers={eventHandlers} style={style} />
-    </MapContainer>
-  )
-}
-
-const Corners = ({ selected }: { selected: SelectedMap }) => {
-  const matching = filter(geoJSON.features, (feature: Feature) => {
-    return selected[feature.properties.CODE]
-  })
-
-  const rows: GridRowsProp = map(matching, (feature) => {
-    const [e, s, w, n] = bbox(feature)
-    return { id: feature.properties.CODE, e, s, w, n }
-  })
-
-  const columns: GridColDef[] = [
-    { field: 'id', headerName: 'Kadastra nr', width: 150 },
-    { field: 'e', headerName: 'Austrumi maks', width: 150 },
-    { field: 'w', headerName: 'Rietumi maks', width: 150 },
-    { field: 'n', headerName: 'Ziemeļi maks', width: 150 },
-    { field: 's', headerName: 'Dienvidi maks', width: 150 }
-  ]
-
-  return (
-    <div style={{ height: '500px' }}>
-      <DataGrid autoHeight rows={rows} columns={columns} logLevel='warn' />
-    </div>
-  )
-}
-
-function App() {
-  const [selected, setSelected] = useState<Record<string, boolean>>(persisted)
+export const App = () => {
+  const [selectedParcels, setSelectedParcels] = useState<Record<string, boolean>>(persistedParcels)
+  const [selectedGroups, setSelectedGroups] = useState<Record<string, boolean>>(persistedGroups)
   const [tab, setTab] = useState(0)
+  const [parcels, setParcels] = useState<FeatureCollection>({ type: 'FeatureCollection', features: [] })
 
   useEffect(() => {
-    const onlySelected = reduce(
-      selected,
-      (acc, value, key) => {
-        if (value) {
-          acc[key] = value
-        }
-        return acc
-      },
-      {} as SelectedMap
-    )
+    localStorage.setItem(STORAGE_KEY_PARCELS, JSON.stringify(selectedParcels))
+  }, [selectedParcels])
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(onlySelected))
-  }, [selected])
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_GROUPS, JSON.stringify(selectedGroups))
+  }, [selectedGroups])
+
+  useEffect(() => {
+    Promise.all(
+      map(keys(selectedGroups), (key) => {
+        return fetch(`/kadastrs/kadastrs/parcels/${key}.geojson`).then((response) => response.json())
+      })
+    ).then((files: FeatureCollection[]) => {
+      const allFeatures = flatMap(files, ({ features }) => features)
+      const uniqFeatures = uniqBy(allFeatures, (feature) => get(feature, ['properties', 'CODE']))
+      setParcels({ type: 'FeatureCollection', features: uniqFeatures })
+    })
+  }, [selectedGroups])
+
+  const reset = () => {
+    if (confirm('Nodzēst iezīmēto, sākt no nulles?')) {
+      setSelectedParcels({})
+      setSelectedGroups({})
+      setTab(0)
+    }
+  }
 
   return (
-    <Container>
-      <Tabs value={tab} onChange={(_e, newTab) => setTab(newTab)}>
-        <Tab label='Karte' />
-        <Tab label='Stūri' />
-      </Tabs>
+    <AppContext.Provider value={{ selectedGroups, setSelectedGroups, selectedParcels, setSelectedParcels, parcels }}>
+      <Container>
+        <Tabs value={tab} onChange={(_e, newTab) => setTab(newTab)}>
+          <Tab label='Grupas' />
+          <Tab label='Kadastri' />
+          <Tab label='Stūri' />
+        </Tabs>
 
-      <div>
-        {tab === 0 ? <Map selected={selected} setSelected={setSelected} /> : null}
-        {tab === 1 ? <Corners selected={selected} /> : null}
-      </div>
-    </Container>
+        <div>
+          {tab === 0 ? <GroupMap /> : null}
+          {tab === 1 ? <ParcelMap /> : null}
+          {tab === 2 ? <DataTable /> : null}
+        </div>
+        <Fab
+          color='error'
+          sx={{
+            position: 'absolute',
+            bottom: 16,
+            right: 16
+          }}
+          onClick={reset}
+        >
+          <DeleteIcon />
+        </Fab>
+      </Container>
+    </AppContext.Provider>
   )
 }
-
-export default App
